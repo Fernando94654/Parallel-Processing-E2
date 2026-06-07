@@ -33,14 +33,17 @@
 ; Magnitude = sqrt(Gx² + Gy²), normalized to [0,255].
 (define (filter-edges px w h)
   (define gray-px (filter-grayscale px))
-  (define vec (list->vector gray-px))
+  (define vec (vector->immutable-vector (list->vector gray-px)))
   (define get (make-getter vec w h))
-  (for*/list ([y (in-range h)] [x (in-range w)])
-    (define p   (vector-ref vec (+ (* y w) x)))
-    (define gx  (apply-kernel get x y kernel-sobel-x color-red))
-    (define gy  (apply-kernel get x y kernel-sobel-y color-red))
-    (define mag (clamp (->int (sqrt (+ (* gx gx) (* gy gy)))) 0 255))
-    (make-color mag mag mag (color-alpha p))))
+  (map (lambda (i)
+         (define x   (modulo   i w))
+         (define y   (quotient i w))
+         (define p   (vector-ref vec i))
+         (define gx  (apply-kernel get x y kernel-sobel-x color-red))
+         (define gy  (apply-kernel get x y kernel-sobel-y color-red))
+         (define mag (clamp (->int (sqrt (+ (* gx gx) (* gy gy)))) 0 255))
+         (make-color mag mag mag (color-alpha p)))
+       (build-list (* w h) values)))
 
 
 ; ----- Benchmark: list-ref vs vector-ref ------------

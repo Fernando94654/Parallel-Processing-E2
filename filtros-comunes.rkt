@@ -92,14 +92,17 @@
 
 ; general convolution: same kernel applied to R, G, B
 (define (convolve px w h kr kg kb)
-  (define vec (list->vector px))             ; O(N) once, then O(1) reads
+  (define vec (vector->immutable-vector (list->vector px)))   ; O(N) once, then O(1) reads
   (define get (make-getter vec w h))
-  (for*/list ([y (in-range h)] [x (in-range w)])
-    (define p (vector-ref vec (+ (* y w) x)))
-    (make-color (clamp (->int (apply-kernel get x y kr color-red  )) 0 255)
-                (clamp (->int (apply-kernel get x y kg color-green)) 0 255)
-                (clamp (->int (apply-kernel get x y kb color-blue )) 0 255)
-                (color-alpha p))))
+  (map (lambda (i)
+         (define x (modulo   i w))
+         (define y (quotient i w))
+         (define p (vector-ref vec i))
+         (make-color (clamp (->int (apply-kernel get x y kr color-red  )) 0 255)
+                     (clamp (->int (apply-kernel get x y kg color-green)) 0 255)
+                     (clamp (->int (apply-kernel get x y kb color-blue )) 0 255)
+                     (color-alpha p)))
+       (build-list (* w h) values)))
 
 
 ; ----- Kernels --------------------------------------
