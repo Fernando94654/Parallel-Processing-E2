@@ -1,5 +1,6 @@
 #lang racket
 (require 2htdp/image)
+(require "filtros-comunes.rkt")
 
 ; =====================================================
 ; FASE 1 — Filtros Secuenciales de Imagen
@@ -18,126 +19,34 @@
 ; =====================================================
 
 
-; ----- Utils ----------------------------------------
-
-(define (timer f)
-  (collect-garbage)
-  (define t0 (current-inexact-milliseconds))
-  (define r  (f))
-  (define t1 (current-inexact-milliseconds))
-  (values r (- t1 t0)))
-
-(define (clamp v lo hi) (max lo (min hi v)))
-(define (->int x)       (inexact->exact (round x)))
-
-
-; -----  Images bank --------------------------------
-
-(define img-cat   (bitmap/file "images/cat.png"))
-(define img-cats2 (bitmap/file "images/cats2.png"))
-(define img-ny    (bitmap/file "images/new-york-large.jpg"))
-
-
-; ----- Image conversion <-> RGBA list-----------------
-
-(define (image->pixels img)    (image->color-list  img))
-(define (pixels->image px w h) (color-list->bitmap px w h))
-
-
-; ----- Functional filters per pixel (map)  ---
-
-; grayscale: ITU-R BT.601 weighted luminance
-(define (pixel-grayscale p)
-  (define g (->int (+ (* 0.299 (color-red   p))
-                      (* 0.587 (color-green p))
-                      (* 0.114 (color-blue  p)))))
-  (make-color g g g (color-alpha p)))
-
-; sepia
-(define (pixel-sepia p)
-  (define r (color-red p)) (define g (color-green p)) (define b (color-blue p))
-  (make-color (clamp (->int (+ (* 0.393 r) (* 0.769 g) (* 0.189 b))) 0 255)
-              (clamp (->int (+ (* 0.349 r) (* 0.686 g) (* 0.168 b))) 0 255)
-              (clamp (->int (+ (* 0.272 r) (* 0.534 g) (* 0.131 b))) 0 255)
-              (color-alpha p)))
-
-; negative: inversion of each panel
-(define (pixel-negative p)
-  (make-color (- 255 (color-red   p))
-              (- 255 (color-green p))
-              (- 255 (color-blue  p))
-              (color-alpha p)))
+; ----- Sequential filters (map over pixel list) ----
 
 (define (filter-grayscale px) (map pixel-grayscale px))
 (define (filter-sepia     px) (map pixel-sepia     px))
 (define (filter-negative  px) (map pixel-negative  px))
 
-
-; ----- fConvolution filters 3×3 -----------------------
-; -------------------------------------------------------
-
-; Kernel offsets 3*3 (row-major: top-left → bottom-right)
-(define offsets3x3
-  '((-1 -1) (0 -1) (1 -1)
-    (-1  0) (0  0) (1  0)
-    (-1  1) (0  1) (1  1)))
-
-; getter with border clamp (replicates edge pixel)
-(define (make-getter vec w h)
-  (lambda (x y)
-    (vector-ref vec (+ (* (clamp y 0 (- h 1)) w)
-                       (clamp x 0 (- w 1))))))
-
-; weighted sum of the 3x3 neighborhood in a scalar channel
-(define (apply-kernel get x y kernel extractor)
-  (apply + (map (lambda (off k)
-                  (* k (extractor (get (+ x (car off))
-                                       (+ y (cadr off))))))
-               offsets3x3 kernel)))
-
-; general convolution: same kernel for R, G, B
-(define (convolve px w h kr kg kb)
-  (define vec (list->vector px))             ; O(N) once, then O(1) reads
-  (define get (make-getter vec w h))
-  (for*/list ([y (in-range h)] [x (in-range w)])
-    (define p (vector-ref vec (+ (* y w) x)))
-    (make-color (clamp (->int (apply-kernel get x y kr color-red  )) 0 255)
-                (clamp (->int (apply-kernel get x y kg color-green)) 0 255)
-                (clamp (->int (apply-kernel get x y kb color-blue )) 0 255)
-                (color-alpha p))))
-
-
-; --- gaussian blur 3×3 (normalized kernel, sum = 1) ---
-(define kernel-gauss
-  '(0.0625 0.125 0.0625
-    0.125  0.25  0.125
-    0.0625 0.125 0.0625))
-
 (define (filter-gaussian px w h)
   (convolve px w h kernel-gauss kernel-gauss kernel-gauss))
 
-
-;Border detection: Sobel operator on grayscale channel.
+; Sobel edge detection on grayscale channel.
 ; Gx detects horizontal changes, Gy vertical ones.
 ; Magnitude = sqrt(Gx² + Gy²), normalized to [0,255].
-(define kernel-sobel-x '(-1  0  1  -2  0  2  -1  0  1))
-(define kernel-sobel-y '(-1 -2 -1   0  0  0   1  2  1))
-
 (define (filter-edges px w h)
-  (define gray-pixels (filter-grayscale px))   ; Sobel operates on grayscale
-  (define vec (list->vector gray-pixels))
+  (define gray-px (filter-grayscale px))
+  (define vec (vector->immutable-vector (list->vector gray-px)))
   (define get (make-getter vec w h))
-  (for*/list ([y (in-range h)] [x (in-range w)])
-    (define p   (vector-ref vec (+ (* y w) x)))
-    (define gx  (apply-kernel get x y kernel-sobel-x color-red))
-    (define gy  (apply-kernel get x y kernel-sobel-y color-red))
-    (define mag (clamp (->int (sqrt (+ (* gx gx) (* gy gy)))) 0 255))
-    (make-color mag mag mag (color-alpha p))))
+  (map (lambda (i)
+         (define x   (modulo   i w))
+         (define y   (quotient i w))
+         (define p   (vector-ref vec i))
+         (define gx  (apply-kernel get x y kernel-sobel-x color-red))
+         (define gy  (apply-kernel get x y kernel-sobel-y color-red))
+         (define mag (clamp (->int (sqrt (+ (* gx gx) (* gy gy)))) 0 255))
+         (make-color mag mag mag (color-alpha p)))
+       (build-list (* w h) values)))
 
 
- 
-; ----- benchmark: list-ref vs vector-ref ----------------
-
+; ----- Benchmark: list-ref vs vector-ref ------------
 
 (define demo-n   100000)
 (define demo-ops 3000)
@@ -158,11 +67,7 @@
 (displayln   "  => convolution on a list would be O(N^2); with vector it stays O(N).")
 
 
-; -----  Filters meditions per image -------------------
-
-(define (measure name thunk)
-  (define-values [_ t] (timer thunk))
-  (displayln (format "  ~a ~a ms" (~a name #:min-width 14) (round t))))
+; ----- Filter timings per image ---------------------
 
 (define (report-image label img)
   (define w  (image-width  img))
@@ -178,21 +83,22 @@
 (displayln "\n=== Tiempos secuenciales (ms) ===")
 (report-image "cat.png    (small)  " img-cat)
 ;(report-image "cats2.png  (medium) " img-cats2)
+;(report-image "new-york   (large)  " img-ny)
 
 
-; Visual output
+; ----- Visual output --------------------------------
 
 (pixels->image (filter-grayscale (image->pixels img-cat))
-                 (image-width img-cat) (image-height img-cat))
+               (image-width img-cat) (image-height img-cat))
 
 ;(pixels->image (filter-sepia (image->pixels img-cat))
-;                 (image-width img-cat) (image-height img-cat))
+;               (image-width img-cat) (image-height img-cat))
 
 ;(pixels->image (filter-negative (image->pixels img-cat))
-;                 (image-width img-cat) (image-height img-cat))
+;               (image-width img-cat) (image-height img-cat))
 
 ;(pixels->image (filter-gaussian (image->pixels img-cat) (image-width img-cat) (image-height img-cat))
-;                 (image-width img-cat) (image-height img-cat))
+;               (image-width img-cat) (image-height img-cat))
 
 ;(pixels->image (filter-edges (image->pixels img-cat) (image-width img-cat) (image-height img-cat))
-;                 (image-width img-cat) (image-height img-cat))
+;               (image-width img-cat) (image-height img-cat))
