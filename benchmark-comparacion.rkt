@@ -4,33 +4,13 @@
 (require "filtros-comunes.rkt")
 (require "filtros-mixtos.rkt")
 
-; =====================================================
-; benchmark-comparacion.rkt
-;
-; Compara 4 estrategias para cada filtro:
-;
-;   seq-func  : funcional pura secuencial  (baseline)
-;   seq-mixed : mixta secuencial           (filtros-mixtos)
-;   par-func  : funcional pura paralela    (baseline)
-;   par-mixed : mixta paralela             (filtros-mixtos)
-;
-; Las implementaciones baseline (seq-func, par-func) se
-; definen aquí inline para no depender de los módulos de
-; fase 1/2 (que tienen código de top-level con efectos).
-; =====================================================
 
-
-; ----- Baselines secuenciales (funcionales puras) -------
-; Réplica exacta de filtros-secuenciales.rkt
-
+; Baselines funcionales secuenciales
 (define (sf-grayscale px) (map pixel-grayscale px))
 (define (sf-sepia     px) (map pixel-sepia     px))
 (define (sf-negative  px) (map pixel-negative  px))
 
-
-; ----- Baselines paralelos (funcionales puros) ----------
-; Réplica exacta de filtros-paralelos.rkt
-
+; Baselines funcionales paralelos
 (define (pf-split-into-n lst n)
   (define len (length lst))
   (define sz  (max 1 (inexact->exact (ceiling (/ len n)))))
@@ -47,104 +27,61 @@
                     (pf-split-into-n px n)))
   (apply append (map touch futs)))
 
-
-(define (pf-grayscale px n)   (pf-map-filter pixel-grayscale px n))
-(define (pf-sepia     px n)   (pf-map-filter pixel-sepia     px n))
-(define (pf-negative  px n)   (pf-map-filter pixel-negative  px n))
-
-; ----- Utilidad de formato ------------------------------
-
-(define (fmt-ratio a b)
-  (if (> b 0.001)
-      (format "~ax" (real->decimal-string (/ a b) 1))
-      "N/A"))
-
-(define (hline w) (displayln (make-string w #\-)))
+(define (pf-grayscale px n) (pf-map-filter pixel-grayscale px n))
+(define (pf-sepia     px n) (pf-map-filter pixel-sepia     px n))
+(define (pf-negative  px n) (pf-map-filter pixel-negative  px n))
 
 
-; ----- Comparación secuencial ---------------------------
+(define (fmt-speedup a b)
+  (format "x~a" (real->decimal-string (/ a (max b 0.001)) 1)))
 
-(define (report-sequential px w h)
-  (displayln "\n  SECUENCIAL")
-  (displayln (format "  ~a ~a ~a ~a"
-                     (~a "filtro"    #:min-width 14)
-                     (~a "func(ms)"  #:min-width 10)
-                     (~a "mixto(ms)" #:min-width 10)
-                     "speedup"))
-  (hline 50)
-  (for ([row (list
-    (list "grayscale"   (lambda () (sf-grayscale px))       (lambda () (filter-grayscale-fast px)))
-    (list "sepia"       (lambda () (sf-sepia     px))       (lambda () (filter-sepia-fast     px)))
-    (list "negative"    (lambda () (sf-negative  px))       (lambda () (filter-negative-fast  px)))
-    )])
-    (define name (first row))
-    (define-values [_f tf] (timer (second row)))
-    (define-values [_m tm] (timer (third  row)))
-    (displayln (format "  ~a ~a ~a ~a"
-                       (~a name       #:min-width 14)
-                       (~a (round tf) #:min-width 10)
-                       (~a (round tm) #:min-width 10)
-                       (fmt-ratio tf tm)))))
+(define (report-row name f-func f-mixed)
+  (define-values [_f tf] (timer f-func))
+  (define-values [_m tm] (timer f-mixed))
+  (displayln (format "    ~a  func=~a  mixto=~a  ~a"
+                     (~a name #:min-width 10)
+                     (~a (round tf) #:min-width 6)
+                     (~a (round tm) #:min-width 6)
+                     (fmt-speedup tf tm))))
 
+(define (report-par-row name f-sf f-sm f-pf f-pm)
+  (define-values [_sf t-sf] (timer f-sf))
+  (define-values [_sm t-sm] (timer f-sm))
+  (define-values [_pf t-pf] (timer f-pf))
+  (define-values [_pm t-pm] (timer f-pm))
+  (displayln (format "    ~a  sf=~a  sm=~a  pf=~a  pm=~a  ~a"
+                     (~a name #:min-width 10)
+                     (~a (round t-sf) #:min-width 6)
+                     (~a (round t-sm) #:min-width 6)
+                     (~a (round t-pf) #:min-width 6)
+                     (~a (round t-pm) #:min-width 6)
+                     (fmt-speedup t-pf t-pm))))
 
-; ----- Comparación paralela (por conteo de hilos) ------
-
-(define (report-parallel px w h)
-  (for ([n '(1 2 4 8 16)])
-    (displayln (format "\n  PARALELO — ~a hilo(s)" n))
-    (displayln (format "  ~a ~a ~a ~a ~a ~a"
-                       (~a "filtro"      #:min-width 14)
-                       (~a "seq-f(ms)"  #:min-width 10)
-                       (~a "seq-m(ms)"  #:min-width 10)
-                       (~a "par-f(ms)"  #:min-width 10)
-                       (~a "par-m(ms)"  #:min-width 10)
-                       "par-f/par-m"))
-    (hline 72)
-    (for ([row (list
-      (list "grayscale"
-            (lambda () (sf-grayscale px))
-            (lambda () (filter-grayscale-fast px))
-            (lambda () (pf-grayscale px n))
-            (lambda () (par-filter-grayscale-fast px n)))
-      (list "sepia"
-            (lambda () (sf-sepia px))
-            (lambda () (filter-sepia-fast px))
-            (lambda () (pf-sepia px n))
-            (lambda () (par-filter-sepia-fast px n)))
-      (list "negative"
-            (lambda () (sf-negative px))
-            (lambda () (filter-negative-fast px))
-            (lambda () (pf-negative px n))
-            (lambda () (par-filter-negative-fast px n)))
-      )])
-      (define name (first row))
-      (define-values [_sf t-sf] (timer (second row)))
-      (define-values [_sm t-sm] (timer (third  row)))
-      (define-values [_pf t-pf] (timer (fourth row)))
-      (define-values [_pm t-pm] (timer (fifth  row)))
-      (displayln (format "  ~a ~a ~a ~a ~a ~a"
-                         (~a name          #:min-width 14)
-                         (~a (round t-sf)  #:min-width 10)
-                         (~a (round t-sm)  #:min-width 10)
-                         (~a (round t-pf)  #:min-width 10)
-                         (~a (round t-pm)  #:min-width 10)
-                         (fmt-ratio t-pf t-pm))))))
-
-
-; ----- Runner principal ---------------------------------
 
 (define (run-comparison label img)
-  (define w  (image-width  img))
-  (define h  (image-height img))
   (define px (image->pixels img))
-  (displayln (format "\n╔══════════════════════════════════════════════════════╗"))
-  (displayln (format "  ~a  ~ax~a = ~a px" label w h (* w h)))
-  (displayln (format "╚══════════════════════════════════════════════════════╝"))
-  (report-sequential px w h)
-  (report-parallel   px w h))
+  (displayln (format "\n~a" label))
 
-(displayln "\n=== BENCHMARK: func vs mixto — secuencial y paralelo ===")
-;(run-comparison "cat.png    (small) " img-cat)
-; Descomentar para imágenes más grandes:
-;(run-comparison "cats2.png  (medium)" img-cats2)
-(run-comparison "new-york   (large) " img-ny)
+  (displayln "  secuencial:")
+  (report-row "grayscale" (lambda () (sf-grayscale px)) (lambda () (filter-grayscale-fast px)))
+  (report-row "sepia"     (lambda () (sf-sepia     px)) (lambda () (filter-sepia-fast     px)))
+  (report-row "negative"  (lambda () (sf-negative  px)) (lambda () (filter-negative-fast  px)))
+
+  (for-each (lambda (n)
+    (displayln (format "  ~a hilo(s):" n))
+    (report-par-row "grayscale"
+      (lambda () (sf-grayscale px)) (lambda () (filter-grayscale-fast px))
+      (lambda () (pf-grayscale px n)) (lambda () (par-filter-grayscale-fast px n)))
+    (report-par-row "sepia"
+      (lambda () (sf-sepia px)) (lambda () (filter-sepia-fast px))
+      (lambda () (pf-sepia px n)) (lambda () (par-filter-sepia-fast px n)))
+    (report-par-row "negative"
+      (lambda () (sf-negative px)) (lambda () (filter-negative-fast px))
+      (lambda () (pf-negative px n)) (lambda () (par-filter-negative-fast px n))))
+  '(1 2 4 8 16)))
+
+
+(displayln "=== comparacion func vs mixto ===")
+(run-comparison "cat.png" img-cat)
+;(run-comparison "cats2.png" img-cats2)
+;(run-comparison "new-york" img-ny)
